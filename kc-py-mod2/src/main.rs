@@ -1,16 +1,11 @@
 #[macro_use]
 extern crate lazy_static;
-extern crate rayon;
-
-use rayon::prelude::*;
-use twox_hash::RandomXxHashBuilder64;
-
-//use fxhash::FxHashMap;
-//use seahash::SeaHasher;
+extern crate crossbeam;
+extern crate crossbeam_channel;
+use crossbeam_channel::unbounded;
 use std::collections::HashMap;
 use std::io::{self, BufRead};
-
-// TODO: Figure out what dictionary is optimal
+use std::thread;
 
 // Create the lookup table for the complements
 // See https://github.com/rust-bio/rust-bio/blob/0b8e1e9e012b0ea137e33ca1fc1e5c5cc4bd4f15/src/alphabets/dna.rs#L37
@@ -49,7 +44,7 @@ fn revcomp(seq: &str) -> Sequence {
 }
 
 /// Type alias for the counter
-type Counter = HashMap<String, usize, RandomXxHashBuilder64>;
+type Counter = HashMap<String, usize>;
 /// Type alias of a sequence
 type Sequence = String;
 
@@ -107,39 +102,11 @@ impl<R: io::Read> FastaRead for Reader<R> {
     }
 }
 
-impl<R: io::Read> IntoIterator for Reader<R> {
-    type Item = io::Result<Sequence>;
-    type IntoIter = IterReader<R>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        IterReader { reader: self }
-    }
-}
-
-pub struct IterReader<R: io::Read> {
-    reader: Reader<R>,
-}
-
-impl<R: io::Read> Iterator for IterReader<R> {
-    type Item = io::Result<Sequence>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mut seq = Sequence::new();
-        match self.reader.read(&mut seq) {
-            Ok(_) if seq.is_empty() => None,
-            Ok(_) => Some(Ok(seq)),
-            Err(err) => Some(Err(err)),
-        }
-    }
-}
-
-fn count_kmer(k: usize, seq: Sequence) -> Option<Counter> {
-    //eprintln!("Counting kmmer");
-    //let mut counter: Counter = Counter::new();
-    let mut counter: Counter = Default::default();
+fn count_kmer(counter: &mut Counter, k: usize, seq: &Sequence) {
     if seq.len() < k {
-        return None;
+        return;
     }
+
     for i in 0..seq.len() - k + 1 {
         let kmer_for = &seq[i..(i + k)];
         if kmer_for.contains('N') {
@@ -151,43 +118,62 @@ fn count_kmer(k: usize, seq: Sequence) -> Option<Counter> {
         } else {
             kmer_rev
         };
-
-        // Finally add the kmer to our dictionay
         let count = counter.entry(kmer).or_insert(0);
         *count += 1;
     }
-    //eprintln!("Done counting kmers");
-    Some(counter)
 }
 
 fn count_stdin(k: usize) -> io::Result<Counter> {
-    let stdin = io::stdin();
-    let reader = Reader::new(stdin);
+    let (sender, reciever) = unbounded();
+    let mut counter = HashMap::new();
+    // Create a thread to parse input
+    crossbeam::scope(|s| {
+        s.spawn(|_| {
+            let stdin = io::stdin();
+            let handle = stdin.lock();
+            let mut reader = Reader::new(handle);
+            let mut seq = Sequence::new();
 
-    let counter = reader
-        .into_iter()
-        .par_bridge()
-        .flat_map(|result| {
-            let seq = result.unwrap(); // TODO handle this potential explosion
-            count_kmer(k, seq)
-        })
-        .reduce(
-            //|| Counter::new(),
-            || Default::default(),
-            |mut a: Counter, b: Counter| {
-                for (k, v) in b {
-                    let count = a.entry(k).or_insert(0);
-                    *count += v;
+            // Todo: read the actual seqs and do the things
+            loop {
+                match reader.read(&mut seq) {
+                    Ok(_) if seq.is_empty() => break,
+                    Ok(_) => {
+                        sender.send(seq.clone()).unwrap();
+                    }
+                    Err(err) => return Err(err),
                 }
-                a
-            },
-        );
-    //eprintln!("Counting Done");
+            }
+            drop(sender);
+            Ok(())
+        });
+    })
+    .unwrap();
+
+    // evaluate the parsed values
+    for seq in reciever.iter() {
+        count_kmer(&mut counter, k, &seq);
+    }
     Ok(counter)
+
+    //let mut counter = HashMap::new();
+    //let stdin = io::stdin();
+    //let handle = stdin.lock();
+    //let mut reader = Reader::new(handle);
+    //let mut seq = Sequence::new();
+
+    //// Todo: read the actual seqs and do the things
+    //loop {
+    //match reader.read(&mut seq) {
+    //Ok(_) if seq.is_empty() => break,
+    //Ok(_) => count_kmer(&mut counter, k, &seq),
+    //Err(err) => return Err(err),
+    //}
+    //}
+    //Ok(counter)
 }
 
 fn print_hist(counter: &Counter) {
-    //eprintln!("Printing hist");
     let mut hist = vec![0; 256];
     for (_kmer, count) in counter {
         let idx = if *count > 255 {
@@ -200,12 +186,10 @@ fn print_hist(counter: &Counter) {
     for i in 0..256 {
         println!("{}\t{}", i, hist[i]);
     }
-    //eprintln!("Done printing hist");
 }
 
 fn main() -> io::Result<()> {
     let counter = count_stdin(31)?;
     print_hist(&counter);
-    //eprintln!("Returning main");
     Ok(())
 }

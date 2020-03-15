@@ -1,5 +1,5 @@
 [package]
-name = "kc-py-mod"
+name = "kc-py-mod2"
 version = "0.1.0"
 authors = ["Seth Stadick <sstadick@gmail.com>"]
 edition = "2018"
@@ -8,7 +8,6 @@ edition = "2018"
 
 [dependencies]
 lazy_static = "1.4.0"
-rayon = "1.1.0"
-fxhash= "0.2.1"
-seahash = "4.0.0"
-twox-hash = "1.5.0"
+rayon = "1.3.0"
+crossbeam-channel = "0.4"
+crossbeam = "0.7.3"
