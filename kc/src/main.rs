@@ -1,65 +1,56 @@
-// Use fastq crate to read the gzipped file diretly and offload the reading to a new thread
-// Do the counting sequentially in this thread
-
-#[macro_use]
-extern crate lazy_static;
 use fastq::{parse_path_fa, Record};
 use fnv::FnvHashMap;
-use std::collections::HashMap;
 use std::env::args;
 use std::io::{self};
 
-//type Counter = HashMap<Vec<u8>, usize>;
-type Counter = FnvHashMap<Vec<u8>, usize>;
+type Counter = FnvHashMap<u64, usize>;
 
-lazy_static! {
-    static ref COMPLEMENT: [u8; 256] = {
-        let mut comp = [0; 256];
-        for (v, a) in comp.iter_mut().enumerate() {
-            *a = v as u8;
-        }
-
-        for (&a, &b) in b"AGCTYRWSKMDVHBN".iter().zip(b"TCGARYWSMKHBDVN".iter()) {
-            comp[a as usize] = b;
-            comp[a as usize + 32] = b + 32; // lowercase variants
-        }
-        comp
-    };
-}
-
-/// Return complement of given DNA alphabet char (IUPAC alhpabet supported)
-fn complement(a: u8) -> u8 {
-    COMPLEMENT[a as usize]
-}
-
-/// Create a reverse complement of the input sequence
-// TODO: fix this signature to take an &Sequence instead
-fn revcomp(seq: &[u8]) -> Vec<u8> {
-    seq.iter()
-        .rev()
-        .map(|a| complement(*a))
-        .collect::<Vec<u8>>()
-}
+static SEQ_NT4_TABLE: &'static [u8] = &[
+    0, 1, 2, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 0, 4, 1, 4, 4, 4, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 0, 4, 1, 4, 4, 4, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+];
 
 fn count_kmer(counter: &mut Counter, k: usize, seq: &[u8]) {
-    if seq.len() < k {
-        return;
-    }
-    for i in 0..seq.len() - k + 1 {
-        let kmer_for = &seq[i..(i + k)];
-        if kmer_for.contains(&('N' as u8)) {
-            continue;
+    let mut strands = (0, 0);
+    let mask = (1u64 << k * 2) - 1;
+    let shift = (k - 1) * 2;
+    let mut i = 0;
+    let mut l = 0;
+    loop {
+        if !(i < seq.len()) {
+            break;
         }
-        let kmer_rev = revcomp(kmer_for);
-        let kmer = if kmer_for < &kmer_rev {
-            kmer_for.to_owned() // make kmer a string
+        let c = SEQ_NT4_TABLE[seq[i] as usize];
+        if c < 4 {
+            // Not an N base
+            strands.0 = (strands.0 << 2 | c as u64) & mask; // forward strand
+            strands.1 = strands.1 >> 2 | (3 - c as u64) << shift; // reverse strand
+            l += 1;
+            if l >= k {
+                // we find a kmer
+                let y = if strands.0 < strands.1 {
+                    strands.0
+                } else {
+                    strands.1
+                };
+                // only add one strand! TODO: why?
+                let count = counter.entry(y).or_insert(0);
+                *count += 1;
+            }
         } else {
-            kmer_rev
-        };
+            // if there is an N, restart
+            l = 0;
+            strands.0 = 0;
+            strands.1 = 0;
+        }
 
-        // Finally add the kmer to our dictionay
-        let count = counter.entry(kmer).or_insert(0);
-        *count += 1;
+        i += 1;
     }
 }
 
