@@ -3,12 +3,14 @@
 
 #[macro_use]
 extern crate lazy_static;
-use fastq::{parse_path, Record};
+use fastq::{parse_path_fa, Record};
+use fnv::FnvHashMap;
 use std::collections::HashMap;
 use std::env::args;
 use std::io::{self};
 
-type Counter = HashMap<Vec<u8>, usize>;
+//type Counter = HashMap<Vec<u8>, usize>;
+type Counter = FnvHashMap<Vec<u8>, usize>;
 
 lazy_static! {
     static ref COMPLEMENT: [u8; 256] = {
@@ -78,13 +80,13 @@ fn print_hist(counter: &Counter) {
 
 fn main() -> io::Result<()> {
     // Get the file from
-    let mut counter = HashMap::new();
+    let mut counter = Counter::default();
     let filename = args().nth(1);
     let path = match filename.as_ref().map(String::as_ref) {
         None | Some("-") => None,
         Some(name) => Some(name),
     };
-    parse_path(path, |parser| {
+    parse_path_fa(path, |parser| {
         parser
             .each(|rec| {
                 count_kmer(&mut counter, 31, rec.seq());
@@ -93,5 +95,6 @@ fn main() -> io::Result<()> {
             .unwrap();
     })?;
     print_hist(&counter);
+    std::mem::forget(counter);
     Ok(())
 }

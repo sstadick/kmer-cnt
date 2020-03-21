@@ -7,5 +7,6 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-fastq = "0.6.0"
+fastq = {path = "../../fastq-rs"}
 lazy_static = "1.4.0"
+fnv = "1.0.3"
